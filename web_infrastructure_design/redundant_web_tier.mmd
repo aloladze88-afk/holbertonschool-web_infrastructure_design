@@ -1,0 +1,77 @@
+REDUNDANT WEB TIER
+==================
+
+Legend
+  │ ▼   request path
+  ╎ ▲   response path
+  ┌─┐   component
+  ╔═╗   boundary of one web/application node (one machine per node)
+  ◀     remaining single point of failure
+
+
+    ┌──────────────────────────────────────────────────────────┐
+    │                           User                           │
+    └──────────────────────────────────────────────────────────┘
+              │                                 ▲
+              │ Request over TCP/IP             ╎ Response over TCP/IP
+              ▼                                 ╎
+    ┌──────────────────────────────────────────────────────────┐              ┌────────────────────┐
+    │                      www.foobar.com                      │──── lookup ─▶│        DNS         │
+    │                                                          │◀╌╌╌ 8.8.8.8 ╌│                    │
+    └──────────────────────────────────────────────────────────┘              └────────────────────┘
+              │                                 ▲
+              │ A record → 8.8.8.8              ╎ Response
+              ▼                                 ╎
+    ┌──────────────────────────────────────────────────────────┐
+    │                 Load balancer (HAProxy)                  │ ◀ remaining SPOF
+    └──────────────────────────────────────────────────────────┘
+                │                                   │
+                │ round robin                       │ round robin
+                │                                   │
+                ▼                                   ▼
+╔════════════════════════════════╗  ╔════════════════════════════════╗
+║  Web/App node 1                ║  ║  Web/App node 2                ║
+║                                ║  ║                                ║
+║  ┌──────────────────────────┐  ║  ║  ┌──────────────────────────┐  ║
+║  │    Web server (Nginx)    │  ║  ║  │    Web server (Nginx)    │  ║
+║  └──────────────────────────┘  ║  ║  └──────────────────────────┘  ║
+║               │                ║  ║               │                ║
+║               │ reverse proxy  ║  ║               │ reverse proxy  ║
+║               ▼                ║  ║               ▼                ║
+║  ┌──────────────────────────┐  ║  ║  ┌──────────────────────────┐  ║
+║  │    Application server    │  ║  ║  │    Application server    │  ║
+║  └──────────────────────────┘  ║  ║  └──────────────────────────┘  ║
+║               │                ║  ║               │                ║
+║               │ runs           ║  ║               │ runs           ║
+║               ▼                ║  ║               ▼                ║
+║  ┌──────────────────────────┐  ║  ║  ┌──────────────────────────┐  ║
+║  │     Application code     │  ║  ║  │     Application code     │  ║
+║  └──────────────────────────┘  ║  ║  └──────────────────────────┘  ║
+║                                ║  ║                                ║
+╚════════════════════════════════╝  ╚════════════════════════════════╝
+                │                                   │
+                │ reads / writes                    │ reads / writes
+                ▼                                   ▼
+    ┌──────────────────────────────────────────────────────────┐
+    │                 Database primary (MySQL)                 │ ◀ remaining SPOF
+    └──────────────────────────────────────────────────────────┘
+                                 │
+                                 │ replication
+                                 ▼
+    ┌──────────────────────────────────────────────────────────┐
+    │                 Database replica (MySQL)                 │ read-only, no writes
+    └──────────────────────────────────────────────────────────┘
+
+
+Notes
+  - Both nodes receive traffic at the same time, so the pair is
+    active-active rather than active-passive.
+  - Responses retrace the same route in reverse: primary -> application
+    code -> application server -> web server -> balancer -> user.
+  - Every read and every write is sent to the primary. The replica
+    receives a one-way stream of changes and accepts no writes.
+  - Nothing in this design promotes the replica on its own. Replication
+    protects the data, not the ability to keep writing.
+  - Name resolution happens before the connection is opened and is not a
+    hop on the way to the balancer.
+  - The rendered version of this design is redundant_web_tier.png.

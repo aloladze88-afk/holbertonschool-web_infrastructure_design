@@ -36,6 +36,7 @@ one section per task.
 | Task | Design | Files |
 | --- | --- | --- |
 | 0 | Model a Single-Server Web Stack | `single_server_stack.mmd`, `single_server_stack.png` |
+| 1 | Add Redundancy and Traffic Distribution | `redundant_web_tier.mmd`, `redundant_web_tier.png` |
 
 ## Diagram format
 
@@ -53,5 +54,7 @@ holbertonschool-web_infrastructure_design/
 └── web_infrastructure_design/
     ├── README.md
     ├── single_server_stack.mmd
-    └── single_server_stack.png
+    ├── single_server_stack.png
+    ├── redundant_web_tier.mmd
+    └── redundant_web_tier.png
 ```
