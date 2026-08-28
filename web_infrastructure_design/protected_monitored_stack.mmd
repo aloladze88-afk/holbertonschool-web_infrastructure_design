@@ -1,0 +1,100 @@
+PROTECTED AND MONITORED STACK
+=============================
+
+Legend
+  │ ▼   request path
+  ╎ ▲   response path
+  ┌─┐   component
+  ╔═╗   boundary of one web/application node (one machine per node)
+  ◀     remaining single point of failure
+  ••▶   metric flow, one way into the monitoring system
+
+
+    ┌──────────────────────────────────────────────────────────┐
+    │                           User                           │
+    └──────────────────────────────────────────────────────────┘
+              │                                 ▲
+              │ HTTPS                           ╎ Response over HTTPS
+              ▼                                 ╎
+    ┌──────────────────────────────────────────────────────────┐              ┌────────────────────┐
+    │                      www.foobar.com                      │──── lookup ─▶│        DNS         │
+    │                                                          │◀╌╌╌ 8.8.8.8 ╌│                    │
+    └──────────────────────────────────────────────────────────┘              └────────────────────┘
+              │                                 ▲
+              │ HTTPS  ·  A record → 8.8.8.8    ╎ Response
+              ▼                                 ╎
+    ┌──────────────────────────────────────────────────────────┐
+    │                         Firewall                         │
+    └──────────────────────────────────────────────────────────┘
+              │                                 ▲
+              │ filtered traffic                ╎ Response
+              ▼                                 ╎
+    ┌──────────────────────────────────────────────────────────┐
+    │                 Load balancer (HAProxy)                  │ ◀ remaining SPOF
+    └──────────────────────────────────────────────────────────┘
+                │                                   │
+                │ round robin                       │ round robin
+                │                                   │
+                ▼                                   ▼
+    ┌───────────────────────┐           ┌───────────────────────┐
+    │       Firewall        │           │       Firewall        │
+    └───────────────────────┘           └───────────────────────┘
+                │                                   │
+                │                                   │
+                ▼                                   ▼
+╔════════════════════════════════╗  ╔════════════════════════════════╗
+║  Web/App node 1                ║  ║  Web/App node 2                ║
+║                                ║  ║                                ║
+║  ┌──────────────────────────┐  ║  ║  ┌──────────────────────────┐  ║
+║  │    Web server (Nginx)    │  ║  ║  │    Web server (Nginx)    │  ║
+║  └──────────────────────────┘  ║  ║  └──────────────────────────┘  ║
+║               │                ║  ║               │                ║
+║               │ reverse proxy  ║  ║               │ reverse proxy  ║
+║               ▼                ║  ║               ▼                ║
+║  ┌──────────────────────────┐  ║  ║  ┌──────────────────────────┐  ║
+║  │    Application server    │  ║  ║  │    Application server    │  ║
+║  └──────────────────────────┘  ║  ║  └──────────────────────────┘  ║
+║               │                ║  ║               │                ║
+║               │ runs           ║  ║               │ runs           ║
+║               ▼                ║  ║               ▼                ║
+║  ┌──────────────────────────┐  ║  ║  ┌──────────────────────────┐  ║
+║  │     Application code     │  ║  ║  │     Application code     │  ║
+║  └──────────────────────────┘  ║  ║  └──────────────────────────┘  ║
+║                                ║  ║                                ║
+╚════════════════════════════════╝  ╚════════════════════════════════╝
+                │                                   │
+                │ reads / writes                    │ reads / writes
+                ▼                                   ▼
+    ┌──────────────────────────────────────────────────────────┐
+    │                 Database primary (MySQL)                 │ ◀ remaining SPOF
+    └──────────────────────────────────────────────────────────┘
+                                 │
+                                 │ replication
+                                 ▼
+    ┌──────────────────────────────────────────────────────────┐
+    │                 Database replica (MySQL)                 │ read-only, no writes
+    └──────────────────────────────────────────────────────────┘
+
+
+METRIC FLOWS  (one way, into the monitoring system)
+
+   Load balancer (HAProxy)         ────── metrics ──────▶┐
+   Web server (Nginx)  ·  node 1   ──── QPS metrics ────▶│
+   Web server (Nginx)  ·  node 2   ──── QPS metrics ────▶│     ┌────────────────────────────┐
+   Application server  ·  node 1   ────── metrics ──────▶├────▶│     Monitoring system      │
+   Application server  ·  node 2   ────── metrics ──────▶│     └────────────────────────────┘
+   Database primary (MySQL)        ────── metrics ──────▶┘
+
+
+Notes
+  - The connection from the user to the entry firewall is HTTPS, and the
+    same connection carries the response back.
+  - Metric flows are one way. The monitoring system receives data and
+    sends nothing back to the services it observes.
+  - Both nodes receive traffic at the same time, so the pair is
+    active-active rather than active-passive.
+  - Every read and every write is still sent to the one writable primary.
+    The replica accepts no writes and promotion is a manual operation.
+  - This is a design. No filtering rule, certificate, collection agent or
+    alert is configured here.
+  - The rendered version of this design is protected_monitored_stack.png.

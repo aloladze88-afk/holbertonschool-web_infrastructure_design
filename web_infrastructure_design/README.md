@@ -381,6 +381,238 @@ Additional checks carried out on this design:
       that replication on its own keeps writes available.
 - [x] All text files are UTF-8 and end with a newline.
 
+## 2. Add Protection and Observability
+
+### Diagram
+
+![Protected and Monitored Stack](protected_monitored_stack.png)
+
+The plain-text version of the same design is in `protected_monitored_stack.mmd`.
+
+Everything in this section describes where these components belong in the
+architecture and what they are for. Nothing here is configured: no filtering
+rule is written, no certificate is obtained, no collection agent is installed and
+no alert is defined.
+
+### What was added
+
+Three **Firewall** nodes and one **Monitoring system**. One firewall sits at the
+entry, in front of the load balancer, so that every request from outside passes
+through it before reaching anything else. The other two sit in front of
+`Web/App node 1` and `Web/App node 2`, so that each node is also protected from
+traffic that did not arrive through the balancer. The connection from the user to
+that entry firewall is **HTTPS**.
+
+The monitoring system receives one-way metric flows from the load balancer, from
+both web servers, from both application servers, and from the database primary.
+The flows from the web servers are labelled **QPS metrics**.
+
+### What a firewall does — and what it does not do
+
+A firewall sits on a network path and decides which traffic is allowed to pass,
+based on properties of the traffic itself: source and destination address, port,
+protocol, and often connection state. Everything it does not allow is dropped.
+
+Its architectural purpose here is **reducing what is reachable**. Without one,
+every port that any service happens to be listening on is reachable from wherever
+the machine is reachable from. With one, the intended shape of the design can be
+enforced: the outside world reaches the balancer and nothing else; each node
+accepts traffic from the balancer rather than from the whole internet; the
+database is reached by the application servers rather than by anyone who finds
+its address.
+
+What a firewall does **not** do is equally important:
+
+- It does not inspect whether allowed traffic is legitimate. A request to a port
+  the firewall permits is passed through, whether it is a normal page view or an
+  attack against the application. SQL injection, a stolen session cookie, or a
+  flaw in the application code all arrive on the port the firewall was told to
+  allow.
+- It does not encrypt anything. Traffic it permits crosses the network in
+  whatever form it was already in.
+- It does not authenticate users, patch software, or fix a misconfigured service.
+- It offers nothing against an attacker who is already inside the boundary it
+  guards, or against traffic between two components on the same side of it.
+
+A firewall narrows the attack surface. It does not make what remains exposed
+safe.
+
+### Why HTTPS
+
+HTTPS is HTTP carried inside a TLS connection, and it provides three things that
+plain HTTP does not:
+
+- **Confidentiality.** Without it, everything travels in readable form and
+  anyone on the network path — a shared Wi-Fi network, an intermediate provider —
+  can read passwords, session cookies and personal data.
+- **Integrity.** TLS detects modification in transit. Over plain HTTP, a party in
+  the middle can alter the response, inject content, or downgrade links, and
+  neither end can tell.
+- **Authentication of the server.** The certificate lets the browser check that
+  the host it reached really is the one for `www.foobar.com`, rather than
+  something that intercepted the connection or answered a poisoned DNS response.
+
+There is a practical dimension too: browsers now mark plain HTTP as not secure,
+and features such as service workers and geolocation are restricted to secure
+contexts.
+
+### TLS termination and the internal hop
+
+In this design the TLS connection is terminated at the load balancer: the
+balancer is the endpoint that holds the certificate, decrypts the request, and
+decides which node to forward it to. It has to decrypt in order to do that work.
+
+The consequence is that **HTTPS protects the leg the user can see, not
+necessarily the legs behind it**. Once the balancer has decrypted a request, the
+hop from the balancer to `Web server (Nginx)` — and the hop from the application
+server to the database — is plain traffic unless encryption is deliberately
+continued on those hops as well. Re-encrypting to the backend is often called TLS
+re-encryption or end-to-end TLS; the alternative is to accept plaintext internally
+on the argument that the internal network is trusted.
+
+That argument is worth stating carefully, because it is the reasoning behind a
+common mistake. "Internal" is not the same as "private": the traffic still
+crosses a physical or virtual network that other tenants, other services or a
+compromised neighbouring machine may be able to observe. A padlock in the user's
+browser says nothing about what happens after the balancer. Whether to encrypt
+the internal hops is a design decision, and this design does not make it — it only
+shows where the decision has to be taken.
+
+### How monitoring collects data
+
+A monitoring system needs data from the machines it observes, and something has to
+produce and deliver it. That job belongs to a **monitoring client** — often called
+an agent — running alongside each observed service.
+
+Conceptually the agent does three things. It **collects**: it reads counters the
+service already keeps, parses log lines, or asks the service for its current
+state. It **aggregates**: raw events are turned into numbers over a time window,
+because sending every single event would cost more than the measurement is worth.
+It **sends**: the aggregated values are pushed to the monitoring system at an
+interval, tagged with which machine and which service they came from.
+
+Some systems invert the last step and have the monitoring server *pull* from an
+endpoint each service exposes, rather than having each agent push. Either way the
+direction of the useful data is the same and it is one way — which is why the
+metric flows in the diagram are drawn with arrows into the monitoring system and
+none coming back out. The monitoring system observes; it does not participate in
+serving requests.
+
+What the system does with that data is store it as a time series, so a value can
+be compared with the same value an hour or a week ago, and display it. This is
+what makes monitoring different from logging into a machine and looking: it gives
+history and comparison across all the machines at once.
+
+### QPS, and what it tells you
+
+**QPS** means **queries per second**: how many requests a component handles in a
+second, averaged over the interval it is measured on. In this design it is
+measured at the web servers, which is why those flows are labelled `QPS metrics`.
+
+QPS is the most direct measure of demand, and reading it over time answers
+questions that cannot be answered from a single machine's health:
+
+- **Is traffic growing?** A QPS trend rising week over week is the signal that
+  capacity planning is needed *before* the site becomes slow, rather than after.
+- **Is something abnormal right now?** A sudden spike can be a launch, a link from
+  a large site, a crawler, or an attack. A sudden collapse to near zero usually
+  means requests are not arriving — a DNS problem, a balancer problem, or a
+  network problem — which is invisible from inside a healthy-looking application.
+- **Is the load actually being distributed?** Comparing the QPS of node 1 with the
+  QPS of node 2 shows whether round robin is doing what it is supposed to. Two
+  numbers that drift apart mean one node is taking more than its share, or has
+  quietly fallen out of the pool.
+- **Where is the capacity limit?** QPS read together with response time is what
+  locates it. Response time stays flat as QPS rises, up to a point, and then
+  climbs sharply. That knee is the measured capacity of the current design, and it
+  is the number that justifies adding a third node — as opposed to guessing.
+
+QPS alone is not enough, which is worth saying: it counts requests without saying
+how expensive they were, so it is read alongside response time, error rate and
+resource usage.
+
+### Why one writable primary is still a write-availability risk
+
+Nothing added in this design changes the write path. There is still exactly one
+**Database primary (MySQL)**, it is still the only node that accepts writes, and
+both application servers still send every write to it.
+
+Firewalls do not help here — they restrict who can reach the primary, not what
+happens when it stops answering. Monitoring does not help either, in the sense
+that matters: it will tell you the primary is down, faster and more reliably than
+users complaining would, but knowing is not the same as still working.
+
+The **Database replica (MySQL)** holds a current copy of the data, but it is
+read-only, and nothing in this design promotes it. If the primary fails, every
+operation that writes — signing up, logging in if sessions are stored in the
+database, placing an order, posting — fails with it, and stays broken until a
+person decides the primary is gone, promotes the replica, and repoints the
+application. Reads might continue from the replica if the application was built to
+fall back to it, so a site can be in the odd state of being browsable but
+read-only.
+
+The redundancy in this design covers the web and application tier. The entry point
+and the write path are each still a single component, and that is what the two
+`remaining SPOF` markers in the diagram indicate.
+
+### Why collocation makes scaling and maintenance harder
+
+Each `Web/App node` boundary in this diagram is one machine running the web
+server, the application server and the application code together. That is
+collocation, and it costs flexibility in two ways.
+
+**Scaling stops being independent.** Web serving and application execution consume
+different resources — static file serving is mostly network and disk, application
+logic is mostly CPU and memory, a database is mostly memory and disk I/O. When
+they share a machine, the only unit of growth is the whole machine. If the
+application layer is the part running out of CPU, adding another node also
+duplicates a web server that was not under pressure, so capacity is bought in a
+shape that does not match demand. The tiers also compete: a heavy database query
+and a burst of application work fight over the same CPU and the same memory, and
+one degrades the other in ways that are hard to attribute. Tuning becomes a
+compromise, because settings that suit one service take resources from another on
+the same box.
+
+**Maintenance stops being independent.** Anything requiring a reboot takes every
+collocated service down at once. Upgrading one component means accepting its risk
+for all of them, and a version conflict between two services on the same machine
+has to be resolved rather than avoided. A crash or a memory leak in one service
+can take the machine, and therefore the others, with it. Security is affected the
+same way: a compromise of the web server is a compromise of the machine, which is
+a compromise of everything else running on it — which is also why a firewall in
+front of a node cannot protect the services on that node from each other.
+
+Separating the tiers onto their own machines is what the next design addresses.
+
+### Self-validation
+
+- [x] `protected_monitored_stack.mmd` renders successfully.
+- [x] HTTPS is shown on the user-to-entry-firewall connection before the load balancer.
+- [x] Exactly three firewalls are present in the required positions.
+- [x] Every required service sends a one-way metric flow to the monitoring system.
+- [x] At least one web-server metric flow is labeled `QPS metrics`.
+- [x] The README explains the requested security and monitoring roles without claiming that they were implemented.
+- [x] The README explains all three stated architectural limitations.
+
+Note on the first item: as for the previous designs,
+`protected_monitored_stack.mmd` holds a plain-text diagram rather than Mermaid
+source, with `protected_monitored_stack.png` as the rendered image.
+
+Additional checks carried out on this design:
+
+- [x] The three `Firewall` nodes are placed one before the load balancer and one
+      before each web/application group.
+- [x] The user's connection carries the label `HTTPS` on every segment between the
+      user and the entry firewall.
+- [x] Six one-way metric flows are drawn: from the load balancer, from each
+      `Web server (Nginx)`, from each `Application server`, and from
+      `Database primary (MySQL)`.
+- [x] Both web-server metric flows are labeled `QPS metrics`.
+- [x] Metric flows are drawn in a distinct style so that user traffic and
+      observability traffic are not confused.
+- [x] No flow returns from the monitoring system to an observed service.
+- [x] All text files are UTF-8 and end with a newline.
+
 ## Repository structure
 
 ```text
@@ -391,5 +623,7 @@ holbertonschool-web_infrastructure_design/
     ├── single_server_stack.mmd
     ├── single_server_stack.png
     ├── redundant_web_tier.mmd
-    └── redundant_web_tier.png
+    ├── redundant_web_tier.png
+    ├── protected_monitored_stack.mmd
+    └── protected_monitored_stack.png
 ```
