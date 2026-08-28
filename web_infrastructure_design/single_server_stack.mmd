@@ -1,65 +1,57 @@
 SINGLE-SERVER WEB STACK
+=======================
 
-REQUEST PATH
-
-┌───────────────┐
-│     User      │
-└───────┬───────┘
-        │
-        │ Request over TCP/IP ⚡
-        ▼
-┌─────────────────┐
-│ www.foobar.com  │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│       DNS       │
-└────────┬────────┘
-         │
-         │ A record → 8.8.8.8
-         ▼
-┌──────────────────────────────────────────────────────────┐
-│                 SINGLE SERVER — 8.8.8.8                 │
-│                                                          │
-│  ┌──────────────────────────┐                            │
-│  │   Web server (Nginx)     │                            │
-│  └────────────┬─────────────┘                            │
-│               │ HTTP request / reverse proxy ⚡           │
-│               ▼                                          │
-│  ┌──────────────────────────┐                            │
-│  │    Application server    │                            │
-│  └────────────┬─────────────┘                            │
-│               │ Runs ⚡                                   │
-│               ▼                                          │
-│  ┌──────────────────────────┐                            │
-│  │     Application code     │                            │
-│  └────────────┬─────────────┘                            │
-│               │ Reads / writes data ⚡                    │
-│               ▼                                          │
-│  ┌───────────────────────────────┐                       │
-│  │ Database (PotsgreSQL/MySQL)   │                       │
-│  └───────────────────────────────┘                       │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
+Legend
+  │ ▼   request path
+  ╎ ▲   response path
+  ┌─┐   component
+  ╔═╗   boundary of the one machine that hosts every service
 
 
-RESPONSE PATH
+    ┌──────────────────────────────────────────────┐
+    │                     User                     │
+    └──────────────────────────────────────────────┘
+              │                               ▲
+              │ Request over TCP/IP           ╎ Response over TCP/IP
+              ▼                               ╎
+    ┌──────────────────────────────────────────────┐                ┌──────────────────┐
+    │                www.foobar.com                │──── lookup ───▶│       DNS        │
+    │                                              │◀╌╌╌ 8.8.8.8 ╌╌╌│                  │
+    └──────────────────────────────────────────────┘                └──────────────────┘
+              │                               ▲
+              │ A record → 8.8.8.8            ╎ Response
+              ▼                               ╎
+╔════════════════════════════════════════════════════════════════════╗
+║  SERVER  (8.8.8.8)                                                 ║
+║                                                                    ║
+║   ┌──────────────────────────────────────────────┐                 ║
+║   │              Web server (Nginx)              │                 ║
+║   └──────────────────────────────────────────────┘                 ║
+║             │                               ▲                      ║
+║             │ HTTP request / reverse proxy  ╎ Response             ║
+║             ▼                               ╎                      ║
+║   ┌──────────────────────────────────────────────┐                 ║
+║   │              Application server              │                 ║
+║   └──────────────────────────────────────────────┘                 ║
+║             │                               ▲                      ║
+║             │ runs                          ╎ Response             ║
+║             ▼                               ╎                      ║
+║   ┌──────────────────────────────────────────────┐                 ║
+║   │               Application code               │                 ║
+║   └──────────────────────────────────────────────┘                 ║
+║             │                               ▲                      ║
+║             │ reads / writes data           ╎ Response             ║
+║             ▼                               ╎                      ║
+║   ┌──────────────────────────────────────────────┐                 ║
+║   │         Database (PotsgreSQL/MySQL)          │                 ║
+║   └──────────────────────────────────────────────┘                 ║
+║                                                                    ║
+╚════════════════════════════════════════════════════════════════════╝
 
-Database (PotsgreSQL/MySQL)
-        │
-        ▼
-Application code
-        │
-        ▼
-Application server
-        │
-        ▼
-Web server (Nginx)
-        │
-        │ Response over TCP/IP ⚡
-        ▼
-User
 
-DNS is used to resolve www.foobar.com before the browser connects to the
-server. The response does not travel back through DNS.
+Notes
+  - Name resolution happens before the connection is opened. The reply to
+    the browser does not travel back through that lookup step.
+  - Every component drawn inside the boundary runs on the same machine at
+    8.8.8.8, which therefore is a single point of failure.
+  - The rendered version of this design is single_server_stack.png.
