@@ -38,6 +38,7 @@ one section per task.
 | 0 | Model a Single-Server Web Stack | `single_server_stack.mmd`, `single_server_stack.png` |
 | 1 | Add Redundancy and Traffic Distribution | `redundant_web_tier.mmd`, `redundant_web_tier.png` |
 | 2 | Add Protection and Observability | `protected_monitored_stack.mmd`, `protected_monitored_stack.png` |
+| 3 | Separate Tiers and Remove the Load-Balancer SPOF | `separated_tiers.mmd`, `separated_tiers.png` |
 
 ## Diagram format
 
@@ -59,5 +60,7 @@ holbertonschool-web_infrastructure_design/
     ├── redundant_web_tier.mmd
     ├── redundant_web_tier.png
     ├── protected_monitored_stack.mmd
-    └── protected_monitored_stack.png
+    ├── protected_monitored_stack.png
+    ├── separated_tiers.mmd
+    └── separated_tiers.png
 ```

@@ -1,0 +1,89 @@
+SEPARATED TIERS
+===============
+
+Legend
+  │ ▼   request path
+  ╎ ▲   response path
+  ┌─┐   component
+  ╔═╗   tier boundary (its own group of machines)
+
+
+    ┌──────────────────────────────────────────────────────────┐
+    │                           User                           │
+    └──────────────────────────────────────────────────────────┘
+                │                               ▲
+                │ HTTPS                         ╎ Response over HTTPS
+                ▼                               ╎
+    ┌──────────────────────────────────────────────────────────┐              ┌────────────────────┐
+    │                      www.foobar.com                      │──── lookup ─▶│        DNS         │
+    │                                                          │◀╌╌╌ 8.8.8.8 ╌│                    │
+    └──────────────────────────────────────────────────────────┘              └────────────────────┘
+                │                               ▲
+                │ A record → 8.8.8.8            ╎ Response
+                ▼                               ╎
+    ┌──────────────────────────────────────────────────────────┐
+    │                         Firewall                         │
+    └──────────────────────────────────────────────────────────┘
+                │                               ▲
+                │ filtered traffic              ╎ Response
+                ▼                               ╎
+                               failover
+   ┌─────────────────────────┐          ┌─────────────────────────┐
+   │ Load balancer (HAProxy) │◀────────▶│ Load balancer (HAProxy) │ standby, takes over the entry point on failover
+   └─────────────────────────┘          └─────────────────────────┘
+                │
+                │ round robin
+                ├────────────────────────────────────┐
+                ▼                                    ▼
+╔════════════════════════════════════════════════════════════════════╗
+║  WEB TIER                                                          ║
+║                                                                    ║
+║ ┌───────────────────────────┐        ┌───────────────────────────┐ ║
+║ │    Web server (Nginx)     │        │    Web server (Nginx)     │ ║
+║ └───────────────────────────┘        └───────────────────────────┘ ║
+║                                                                    ║
+╚════════════════════════════════════════════════════════════════════╝
+                │                                    │
+                │ reverse proxy                      │
+                ├────────────────────────────────────┤
+                ▼                                    ▼
+╔════════════════════════════════════════════════════════════════════╗
+║  APPLICATION TIER                                                  ║
+║                                                                    ║
+║ ┌───────────────────────────┐        ┌───────────────────────────┐ ║
+║ │    Application server     │        │    Application server     │ ║
+║ └───────────────────────────┘        └───────────────────────────┘ ║
+║                                                                    ║
+╚════════════════════════════════════════════════════════════════════╝
+                │                                    │
+                │ reads / writes                     │
+                ├────────────────────────────────────┘
+                ▼
+╔════════════════════════════════════════════════════════════════════╗
+║  DATABASE TIER                                                     ║
+║                              replication                           ║
+║ ┌───────────────────────────┐        ┌───────────────────────────┐ ║
+║ │ Database primary (MySQL)  │───────▶│ Database replica (MySQL)  │ ║
+║ └───────────────────────────┘        └───────────────────────────┘ ║
+║ remaining SPOF - only writable node  read-only, no writes          ║
+╚════════════════════════════════════════════════════════════════════╝
+
+
+Notes
+  - The two balancers are a pair, not a second entry point. One is active
+    and one is standby; the failover relationship between them is shown at
+    a conceptual level only. No routing protocol is designed here.
+  - The request order is: user, balancer, web tier, application tier,
+    database primary. Any instance in a tier can be reached from any
+    instance in the tier above it.
+  - Replication is a separate one-way flow between the two database
+    instances. It is not part of the request path.
+  - The replica accepts no writes, and nothing here promotes it
+    automatically. Database failover remains a manual operation.
+  - Two instances per tier are drawn to show the structure. Real counts
+    come from measured demand, expected growth, failure tolerance and a
+    justified margin, not from this diagram.
+  - The firewalls in front of each group and the monitoring system from
+    the previous design still apply to every tier here. They are left out
+    so that the tier structure stays legible.
+  - The rendered version of this design is separated_tiers.png.

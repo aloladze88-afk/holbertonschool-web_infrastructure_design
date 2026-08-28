@@ -613,6 +613,195 @@ Additional checks carried out on this design:
 - [x] No flow returns from the monitoring system to an observed service.
 - [x] All text files are UTF-8 and end with a newline.
 
+## 3. Separate Tiers and Remove the Load-Balancer SPOF
+
+### Diagram
+
+![Separated Tiers](separated_tiers.png)
+
+The plain-text version of the same design is in `separated_tiers.mmd`.
+
+The firewalls in front of each group and the monitoring system from the previous
+design still apply to every tier here. They are left out of this diagram so that
+the tier structure stays legible, not because they were removed.
+
+### What was added
+
+A second **Load balancer (HAProxy)**, joined to the first by a **failover**
+relationship. One balancer is active and holds the entry point; the other stands
+by and takes it over if the active one fails. This addresses the entry-point SPOF
+identified in the previous design — **conceptually**. How the address actually
+moves between the two, and what decides that a failover should happen, is not
+designed here.
+
+The web, application and database services are also pulled apart into three
+separate tiers, each on its own group of machines: a **web tier** holding two
+`Web server (Nginx)` instances, an **application tier** holding two
+`Application server` instances, and a **database tier** holding
+`Database primary (MySQL)` and `Database replica (MySQL)`.
+
+The request path runs user → load balancer → web server → application server →
+database primary. Replication is drawn as a separate one-way flow between the two
+database instances; it is not part of that path.
+
+### Compared with the single-server design
+
+The first design put everything — web server, application server, application
+code and database — on one machine, reached at one address.
+
+| | Single server | Separated tiers |
+| --- | --- | --- |
+| Entry point | The one machine's address | Two balancers with a failover relationship |
+| Machines | One | Several, grouped by tier |
+| A machine is lost | The whole site is down | The tier absorbs it, except the database primary |
+| Maintenance | Every service goes down together | One tier at a time |
+| Scaling | Replace the machine with a bigger one | Add instances to the tier that needs them |
+| Cost | Lowest | Highest of the four designs |
+| Operational complexity | Lowest | Highest of the four designs |
+| Remaining SPOFs | Everything | The writable database primary |
+
+The pattern across all four designs is the same trade: each step removes a way for
+the whole site to fail, and pays for it in machines to run and things to keep
+correct. The single-server design is not wrong — for a site with little traffic
+and tolerance for downtime, it is the honest choice, and this design would be an
+expensive way to serve the same visitors.
+
+### Independent scaling
+
+The three tiers use different resources. Serving static files is mostly network
+and disk; running application logic is mostly CPU and memory; a database is mostly
+memory and disk I/O. They also grow at different rates: a page that got heavier to
+render puts pressure on the application tier while the web tier barely notices.
+
+When these share a machine, the only unit of growth is the whole machine, so
+capacity has to be bought in a fixed ratio that rarely matches the actual
+bottleneck. Separated, each tier is sized on its own. If response times are being
+driven by application processing, application servers are added and nothing else
+changes. The tiers do not have to have the same number of instances, and in
+practice they usually do not: two web servers can comfortably feed five
+application servers, or the reverse, depending on where the work is.
+
+Separation also makes it possible to know *which* tier to grow, because each tier's
+resource usage is now attributable to that tier rather than mixed into one
+machine's totals — which is where the monitoring from the previous design earns
+its place.
+
+### Maintenance isolation
+
+Because each tier sits on its own machines, work on one tier does not have to take
+the others down.
+
+A kernel upgrade on a web server takes that instance out of the balancer's pool
+while the other web server carries the traffic; the application and database tiers
+never notice. Deploying new application code touches the application tier only, so
+static assets keep being served throughout. A database maintenance window affects
+the database tier without requiring the web and application machines to be
+restarted. Version conflicts stop being a problem to resolve and become a
+non-question: the database's dependencies and the application runtime's
+dependencies no longer have to coexist on one filesystem.
+
+The same reasoning applies to failure and to security. A crash or a memory leak in
+one tier takes down machines in that tier rather than everything at once, and a
+compromise of a web server is a compromise of a web-tier machine rather than of a
+machine that also happens to hold the database.
+
+The isolation is not total: the tiers still depend on each other functionally. If
+the database primary stops answering, the application tier is healthy and still
+useless. Separation limits the blast radius of *machine-level* events, not of
+logical dependencies.
+
+### How many instances, and why not more
+
+The two instances per tier drawn here exist to show the structure. They are not a
+recommendation, and copying them — or any count from any diagram, this one
+included — is not sizing. Neither is maximising: more instances of everything
+costs money, and every added machine is another thing to configure identically,
+patch, monitor and get wrong.
+
+A defensible instance count comes from four inputs:
+
+- **Measured demand.** Current QPS per tier, and the response time at that QPS.
+  Measurement also locates the bottleneck, which decides *which* tier gets the
+  instances. Without this, capacity is added where it happens to be easy rather
+  than where it is needed.
+- **Expected growth.** Where demand will be by the time new capacity could
+  realistically be added — a growth rate read from the history the monitoring
+  system has been collecting, not a guess. Sizing for today's traffic means being
+  under-provisioned continuously.
+- **Failure tolerance.** How many instances the tier must be able to lose while
+  still serving the load. Tolerating one failure means the remaining instances have
+  to carry everything alone, so a two-instance tier sized to survive one loss runs
+  at roughly half its capacity in normal operation. That headroom is the price of
+  the availability, and it has to be deliberate rather than accidental.
+- **A justified safety margin.** Room for the traffic that is not average: daily
+  peaks, a campaign, a link from a large site. "Justified" is the operative word —
+  a margin should be traceable to an observed peak-to-average ratio, not chosen
+  because it sounds safe.
+
+The point of writing it this way is that the number is defensible: someone can ask
+why there are four application servers rather than three or eight, and the answer
+is a measurement and an argument rather than a diagram someone once saw.
+
+### Limitations that remain
+
+**Database failover is still manual.** The `Database primary (MySQL)` is still the
+only node that accepts writes, and the `Database replica (MySQL)` is still
+read-only with nothing to promote it automatically. Losing the primary still stops
+every write until a person intervenes. This is the SPOF marked in the diagram, and
+this design does not remove it — automatic database failover is explicitly out of
+scope here, and it is genuinely harder than balancer failover, because promoting
+the wrong node or two nodes at once can lose or corrupt data rather than merely
+interrupt service.
+
+**The balancer failover is conceptual.** The pair is drawn with a failover
+relationship, not a mechanism. What holds the entry address, how the standby
+decides the active one is dead, and what prevents both from claiming the address
+at the same time are all real problems this design does not solve. A pair drawn on
+a diagram is not yet a highly available entry point.
+
+**Cost.** This design runs the most machines of the four, plus the headroom that
+failure tolerance requires, so a meaningful share of the capacity being paid for is
+idle by design.
+
+**Operational complexity.** More machines mean more configuration that must stay
+consistent, deployments that touch several tiers in the right order, more network
+paths and firewall positions to get right, more to patch, and more to monitor.
+Replication and the balancer pair are components in their own right that can lag,
+break or split. Manual procedures — database promotion above all — only work if
+they are written down and rehearsed. The failure modes also become subtler: a
+single-server outage is obvious, while a tier that is quietly running on one
+instance because the other silently dropped out looks fine until the remaining one
+fails too.
+
+### Self-validation
+
+- [x] `separated_tiers.mmd` renders successfully.
+- [x] Two load balancers are connected by a relationship labeled `failover`.
+- [x] The web, application, and database tiers are visibly separated.
+- [x] The web and application tiers each contain at least two instances.
+- [x] The diagram shows the required request order and a distinct replication flow.
+- [x] The README explains independent scaling, maintenance isolation, evidence-based sizing, and at least one remaining limitation.
+
+Note on the first item: as for the previous designs, `separated_tiers.mmd` holds a
+plain-text diagram rather than Mermaid source, with `separated_tiers.png` as the
+rendered image.
+
+Additional checks carried out on this design:
+
+- [x] Two nodes labeled `Load balancer (HAProxy)` are present, joined by an edge
+      labeled `failover`.
+- [x] The web tier contains two `Web server (Nginx)` nodes and the application
+      tier contains two `Application server` nodes.
+- [x] The database tier contains `Database primary (MySQL)` and
+      `Database replica (MySQL)`.
+- [x] The request path runs user → load balancer → web server → application
+      server → database primary, and reaches the primary rather than the replica.
+- [x] `replication` is a separate directed flow between the two database
+      instances and is not part of the request path.
+- [x] The design does not claim automatic database failover or a routing
+      mechanism for the balancer pair.
+- [x] All text files are UTF-8 and end with a newline.
+
 ## Repository structure
 
 ```text
@@ -625,5 +814,7 @@ holbertonschool-web_infrastructure_design/
     ├── redundant_web_tier.mmd
     ├── redundant_web_tier.png
     ├── protected_monitored_stack.mmd
-    └── protected_monitored_stack.png
+    ├── protected_monitored_stack.png
+    ├── separated_tiers.mmd
+    └── separated_tiers.png
 ```
