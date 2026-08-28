@@ -1,0 +1,65 @@
+SINGLE-SERVER WEB STACK
+
+REQUEST PATH
+
+┌───────────────┐
+│     User      │
+└───────┬───────┘
+        │
+        │ Request over TCP/IP ⚡
+        ▼
+┌─────────────────┐
+│ www.foobar.com  │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│       DNS       │
+└────────┬────────┘
+         │
+         │ A record → 8.8.8.8
+         ▼
+┌──────────────────────────────────────────────────────────┐
+│                 SINGLE SERVER — 8.8.8.8                 │
+│                                                          │
+│  ┌──────────────────────────┐                            │
+│  │   Web server (Nginx)     │                            │
+│  └────────────┬─────────────┘                            │
+│               │ HTTP request / reverse proxy ⚡           │
+│               ▼                                          │
+│  ┌──────────────────────────┐                            │
+│  │    Application server    │                            │
+│  └────────────┬─────────────┘                            │
+│               │ Runs ⚡                                   │
+│               ▼                                          │
+│  ┌──────────────────────────┐                            │
+│  │     Application code     │                            │
+│  └────────────┬─────────────┘                            │
+│               │ Reads / writes data ⚡                    │
+│               ▼                                          │
+│  ┌───────────────────────────────┐                       │
+│  │ Database (PotsgreSQL/MySQL)   │                       │
+│  └───────────────────────────────┘                       │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+
+
+RESPONSE PATH
+
+Database (PotsgreSQL/MySQL)
+        │
+        ▼
+Application code
+        │
+        ▼
+Application server
+        │
+        ▼
+Web server (Nginx)
+        │
+        │ Response over TCP/IP ⚡
+        ▼
+User
+
+DNS is used to resolve www.foobar.com before the browser connects to the
+server. The response does not travel back through DNS.
